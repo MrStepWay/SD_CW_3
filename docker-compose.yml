@@ -1,0 +1,114 @@
+services:
+  postgres_payments:
+    image: postgres:15
+    container_name: postgres_payments
+    environment:
+      POSTGRES_DB: ${DB__NAME}
+      POSTGRES_USER: ${DB__USER}
+      POSTGRES_PASSWORD: ${DB__PASSWORD}
+    volumes:
+      - postgres_payments_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB__USER} -d ${DB__NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres_orders:
+    image: postgres:15
+    container_name: postgres_orders
+    environment:
+      POSTGRES_DB: ${DB_ORDERS__NAME}
+      POSTGRES_USER: ${DB_ORDERS__USER}
+      POSTGRES_PASSWORD: ${DB_ORDERS__PASSWORD}
+    volumes:
+      - postgres_orders_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_ORDERS__USER} -d ${DB_ORDERS__NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.11-management
+    container_name: rabbitmq
+    ports:
+      - "15672:15672" # Оставляем на всякий, может захочется посмотреть RabbitMQ Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ__USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ__PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payments_service:
+    build: ./payments_service
+    container_name: payments_service
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./payments_service/app:/app/app
+    environment:
+      - DB__USER=${DB__USER}
+      - DB__PASSWORD=${DB__PASSWORD}
+      - DB__HOST=postgres_payments
+      - DB__PORT=5432
+      - DB__NAME=${DB__NAME}
+      - RABBITMQ__USER=${RABBITMQ__USER}
+      - RABBITMQ__PASSWORD=${RABBITMQ__PASSWORD}
+      - RABBITMQ__HOST=rabbitmq
+      - RABBITMQ__PORT=5672
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres_payments:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  orders_service:
+    build: ./orders_service
+    container_name: orders_service
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./orders_service/app:/app/app
+    environment:
+      - DB__USER=${DB_ORDERS__USER}
+      - DB__PASSWORD=${DB_ORDERS__PASSWORD}
+      - DB__HOST=postgres_orders
+      - DB__PORT=5432
+      - DB__NAME=${DB_ORDERS__NAME}
+      - RABBITMQ__USER=${RABBITMQ__USER}
+      - RABBITMQ__PASSWORD=${RABBITMQ__PASSWORD}
+      - RABBITMQ__HOST=rabbitmq
+      - RABBITMQ__PORT=5672
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres_orders:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  api_gateway:
+    build: ./api_gateway
+    container_name: api_gateway
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./api_gateway/app:/app/app
+    ports:
+      - "8000:8000"
+    environment:
+      - ORDERS_SERVICE_URL=${ORDERS_SERVICE_URL}
+      - PAYMENTS_SERVICE_URL=${PAYMENTS_SERVICE_URL}
+    depends_on:
+      - orders_service
+      - payments_service
+
+volumes:
+  postgres_payments_data:
+  postgres_orders_data:
+  rabbitmq_data:
